@@ -1,0 +1,30 @@
+# ─── Environment variables (NEVER commit these) ──────────────────────────────
+.env
+.env.local
+.env.*.local
+.env.development
+.env.production
+packages/web/.env
+packages/web/.env.local
+packages/ingest/.env
+
+# ─── Next.js ─────────────────────────────────────────────────────────────────
+packages/web/.next/
+packages/web/out/
+
+# ─── Node ────────────────────────────────────────────────────────────────────
+node_modules/
+npm-debug.log*
+
+# ─── OS ──────────────────────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+
+# ─── Editor ──────────────────────────────────────────────────────────────────
+.vscode/
+.idea/
+*.swp
+
+# ─── Build artifacts ─────────────────────────────────────────────────────────
+packages/web/tsconfig.tsbuildinfo
+dist/
