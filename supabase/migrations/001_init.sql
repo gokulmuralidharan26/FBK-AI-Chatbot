@@ -28,7 +28,7 @@ create table if not exists document_chunks (
   document_id uuid        not null references documents(id) on delete cascade,
   content     text        not null,
   metadata    jsonb       not null default '{}',
-  embedding   vector(1536),
+  embedding   vector(768),
   created_at  timestamptz not null default now()
 );
 
@@ -69,7 +69,7 @@ create table if not exists chat_feedback (
 
 -- ─── RPC: similarity search ──────────────────────────────────────────────────
 create or replace function match_document_chunks(
-  query_embedding  vector(1536),
+  query_embedding  vector(768),
   match_count      int     default 5,
   match_threshold  float   default 0.45
 )
