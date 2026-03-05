@@ -1,13 +1,13 @@
 # FBK Chatbot
 
-A production-ready AI chatbot for [fbk.org](https://fbk.org) — embeddable on any website via a single `<script>` tag. Built with Next.js 14, Supabase + pgvector, and OpenAI.
+An AI-powered chatbot for [fbk.org](https://fbk.org) — embeddable on any website via a single `<script>` tag. Built with Next.js, Supabase + pgvector, Google Gemini (chat), and UF NaviGator Toolkit (embeddings).
 
 ## Architecture
 
 ```
 fbk-chatbot/
 ├── packages/
-│   ├── web/               # Next.js 14 app (API + Admin + Widget bundle)
+│   ├── web/               # Next.js app (API + Admin + Widget bundle)
 │   │   ├── src/
 │   │   │   ├── app/
 │   │   │   │   ├── api/chat/          ← SSE streaming chat endpoint
@@ -16,7 +16,9 @@ fbk-chatbot/
 │   │   │   │   └── admin/             ← Admin dashboard (password protected)
 │   │   │   ├── lib/
 │   │   │   │   ├── rag.ts             ← Retrieval-Augmented Generation
-│   │   │   │   ├── ingest.ts          ← Shared ingestion pipeline
+│   │   │   │   ├── ingest.ts          ← Document ingestion pipeline
+│   │   │   │   ├── crawler.ts         ← Website crawler
+│   │   │   │   ├── openai.ts          ← AI clients (Gemini + NaviGator)
 │   │   │   │   └── faq.ts             ← FAQ fast-path
 │   │   │   └── widget/                ← Embeddable chat widget source
 │   │   ├── public/widget.js           ← Built widget bundle (output)
@@ -31,7 +33,8 @@ fbk-chatbot/
 
 - Node.js 18+
 - A [Supabase](https://supabase.com) project (free tier works)
-- An [OpenAI](https://platform.openai.com) API key
+- A [UF NaviGator Toolkit](https://api.ai.it.ufl.edu/ui) API key (UF affiliates only) — used for embeddings
+- A [Google Gemini](https://aistudio.google.com/apikey) API key — used for chat
 
 ---
 
@@ -40,8 +43,8 @@ fbk-chatbot/
 ### 1. Clone & install
 
 ```bash
-git clone https://github.com/your-org/fbk-chatbot.git
-cd fbk-chatbot
+git clone https://github.com/gokulmuralidharan26/FBK-AI-Chatbot.git
+cd FBK-AI-Chatbot
 npm install
 ```
 
@@ -58,7 +61,7 @@ In the Supabase dashboard → **SQL Editor**, paste and run the contents of:
 supabase/migrations/001_init.sql
 ```
 
-This creates all tables, the pgvector index, and the `match_document_chunks` RPC function.
+This creates all tables, a pgvector index (768-dim for `nomic-embed-text-v1.5`), and the `match_document_chunks` RPC function.
 
 ### 4. Create the Storage bucket
 
@@ -69,7 +72,6 @@ In the Supabase dashboard → **Storage** → **New bucket**:
 Then in the SQL Editor run:
 
 ```sql
--- Allow the service role to read/write the docs bucket
 create policy "service role full access"
 on storage.objects for all
 using (auth.role() = 'service_role');
@@ -78,17 +80,20 @@ using (auth.role() = 'service_role');
 ### 5. Set environment variables
 
 ```bash
-cp .env.example .env
+cp .env.example packages/web/.env.local
 ```
 
-Edit `.env`:
+Edit `packages/web/.env.local`:
 
 | Variable | Where to find it |
 |---|---|
 | `NEXT_PUBLIC_SUPABASE_URL` | Supabase → Settings → API → Project URL |
 | `NEXT_PUBLIC_SUPABASE_ANON_KEY` | Supabase → Settings → API → anon public key |
 | `SUPABASE_SERVICE_ROLE_KEY` | Supabase → Settings → API → service_role secret |
-| `OPENAI_API_KEY` | platform.openai.com → API Keys |
+| `NAVIGATOR_API_KEY` | [api.ai.it.ufl.edu/ui](https://api.ai.it.ufl.edu/ui) — needs `nomic-embed-text-v1.5` access |
+| `NAVIGATOR_BASE_URL` | `https://api.ai.it.ufl.edu/v1` |
+| `GEMINI_API_KEY` | [aistudio.google.com/apikey](https://aistudio.google.com/apikey) |
+| `CHAT_MODEL` | `gemini-2.0-flash` (or `gemini-1.5-pro` for more capability) |
 | `ADMIN_PASSWORD` | Choose any strong password |
 | `NEXT_PUBLIC_APP_URL` | Your Vercel URL (or `http://localhost:3000` for local) |
 
@@ -107,22 +112,24 @@ npm run dev
 
 ### Via the Admin Panel (recommended)
 
-1. Visit `/admin` and sign in
-2. Click **Upload** → select a PDF, TXT, or MD file
-3. Enter a title and (optionally) a source URL
-4. Click **Ingest** next to the document
+1. Visit `/admin` and sign in with your `ADMIN_PASSWORD`
+2. **Upload** → select a PDF, TXT, or MD file, enter a title and optional source URL
+3. Click **Ingest** next to the document to chunk, embed, and store it
+
+### Crawl the Website
+
+The admin panel has a **Crawl fbk.org** button that automatically fetches every public page on fbk.org, extracts the text, and ingests it. Re-crawling updates existing pages with fresh content.
 
 ### Via the CLI (batch / automation)
 
 ```bash
-# From the repo root
 npx tsx packages/ingest/ingest.ts \
   --file ./docs/membership-guide.pdf \
   --title "Membership Guide" \
   --url "https://fbk.org/membership"
 ```
 
-The CLI reads `.env` from the current directory. Supported formats: `.pdf`, `.txt`, `.md`.
+Supported formats: `.pdf`, `.txt`, `.md`.
 
 ---
 
@@ -138,6 +145,12 @@ npm start
 
 The widget bundle is automatically built as part of `npm run build` and placed at `public/widget.js`.
 
+To rebuild the widget only (without a full Next.js build):
+
+```bash
+npm run build:widget --workspace=packages/web
+```
+
 ---
 
 ## Deploy to Vercel
@@ -145,16 +158,16 @@ The widget bundle is automatically built as part of `npm run build` and placed a
 1. Push the repo to GitHub
 2. In Vercel → **New Project** → import the repo
 3. Set **Root Directory** to `packages/web`
-4. Add all environment variables from your `.env`
+4. Add all environment variables from your `.env.local`
 5. Deploy
 
 > **Note:** Set `NEXT_PUBLIC_APP_URL` to your Vercel deployment URL after the first deploy.
 
 ---
 
-## Embed in Squarespace (or any website)
+## Embed on Any Website
 
-Add this snippet to your Squarespace site via **Settings → Advanced → Code Injection → Footer**:
+Add this snippet to your site (e.g. Squarespace → Settings → Advanced → Code Injection → Footer):
 
 ```html
 <script
@@ -164,9 +177,7 @@ Add this snippet to your Squarespace site via **Settings → Advanced → Code I
 </script>
 ```
 
-Replace `YOUR_VERCEL_DOMAIN` with your actual Vercel URL (e.g. `fbk-chatbot.vercel.app`).
-
-The widget will appear as a floating "Ask FBK" button in the bottom-right corner.
+Replace `YOUR_VERCEL_DOMAIN` with your actual Vercel URL. The widget appears as a floating chat button in the bottom-right corner.
 
 ---
 
@@ -192,15 +203,6 @@ data: {"type":"done","messageId":"uuid","sessionId":"uuid","sources":[...]}
 data: [DONE]
 ```
 
-**Sources object:**
-```json
-{
-  "title": "FBK Programs Guide",
-  "url": "https://fbk.org/programs",
-  "snippet": "FBK offers three core programs..."
-}
-```
-
 ### `POST /api/feedback`
 
 ```json
@@ -223,8 +225,9 @@ Protected by a shared secret (`ADMIN_PASSWORD` env var).
 |---|---|
 | Upload | Upload PDF/TXT/MD to Supabase Storage |
 | Documents list | View all docs with ingestion status |
-| Ingest | Chunk + embed + upsert a document |
-| Delete | Remove a document and its chunks |
+| Ingest | Chunk, embed, and upsert a document into the vector DB |
+| Delete | Remove a document and all its chunks |
+| Crawl Website | Auto-fetch and ingest all public pages from fbk.org |
 
 ---
 
@@ -232,19 +235,30 @@ Protected by a shared secret (`ADMIN_PASSWORD` env var).
 
 - The bot **refuses** requests for private member data
 - **No hallucinated links** — only URLs from ingested sources or the [configured allowlist](packages/web/src/lib/rag.ts)
-- All responses are generated with `temperature: 0.3` for consistency
+- All responses use `temperature: 0.3` for consistency
 - Conversation history (last 6 turns) is included for context
 - FAQ fast-path handles common questions without calling the embedding API
+- If the embedding API is unavailable, chat falls back gracefully to Gemini's own knowledge
 
 ---
 
 ## Environment Variables Reference
 
 ```env
+# Supabase
 NEXT_PUBLIC_SUPABASE_URL=       # Supabase project URL
 NEXT_PUBLIC_SUPABASE_ANON_KEY=  # Supabase anon key (public)
 SUPABASE_SERVICE_ROLE_KEY=      # Supabase service role key (secret, server-only)
-OPENAI_API_KEY=                 # OpenAI API key
+
+# UF NaviGator Toolkit — embeddings only
+NAVIGATOR_API_KEY=              # NaviGator API key (needs nomic-embed-text-v1.5 access)
+NAVIGATOR_BASE_URL=             # https://api.ai.it.ufl.edu/v1
+
+# Google Gemini — chat completions
+GEMINI_API_KEY=                 # Google AI Studio API key
+CHAT_MODEL=                     # gemini-2.0-flash (default)
+
+# App
 ADMIN_PASSWORD=                 # Shared secret for /admin
 NEXT_PUBLIC_APP_URL=            # Your app URL (used by homepage embed snippet)
 ```
@@ -255,10 +269,11 @@ NEXT_PUBLIC_APP_URL=            # Your app URL (used by homepage embed snippet)
 
 | Layer | Technology |
 |---|---|
-| Frontend | Next.js 14 (App Router), TypeScript, Tailwind CSS |
-| Widget | React 18, esbuild (Shadow DOM bundle) |
+| Frontend | Next.js (App Router), TypeScript, Tailwind CSS |
+| Widget | React, esbuild bundle |
 | API | Next.js Route Handlers, Server-Sent Events |
-| AI | OpenAI `gpt-4o-mini` + `text-embedding-3-small` |
+| Chat AI | Google Gemini 2.0 Flash |
+| Embeddings | UF NaviGator `nomic-embed-text-v1.5` (runs on HiPerGator) |
 | Database | Supabase Postgres + pgvector |
 | Storage | Supabase Storage |
 | Deployment | Vercel |
