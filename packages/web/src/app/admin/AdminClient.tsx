@@ -665,7 +665,12 @@ export default function AdminClient() {
                 environment variable to be set.
               </p>
 
-              <div className="flex items-center justify-between p-4 bg-gray-50 rounded-xl border border-gray-200">
+              <button
+                type="button"
+                onClick={handleToggleTavily}
+                disabled={tavilyToggling}
+                className="w-full flex items-center justify-between p-4 bg-gray-50 rounded-xl border border-gray-200 hover:bg-gray-100 transition-colors disabled:opacity-60 cursor-pointer text-left"
+              >
                 <div>
                   <p className="font-medium text-gray-900">Tavily Web Search</p>
                   <p className="text-sm text-gray-500 mt-0.5">
@@ -674,23 +679,19 @@ export default function AdminClient() {
                       : 'Inactive — chatbot uses only its FBK knowledge base'}
                   </p>
                 </div>
-                <button
-                  type="button"
-                  onClick={handleToggleTavily}
-                  disabled={tavilyToggling}
-                  className={`relative inline-flex h-7 w-13 items-center rounded-full transition-colors focus:outline-none disabled:opacity-60 cursor-pointer ${
+                {/* Toggle pill */}
+                <div
+                  className={`relative shrink-0 ml-4 h-8 w-14 rounded-full transition-colors duration-200 ${
                     tavilyEnabled ? 'bg-fbk-600' : 'bg-gray-300'
                   }`}
-                  style={{ width: '3.25rem' }}
-                  aria-label={tavilyEnabled ? 'Disable web search' : 'Enable web search'}
                 >
                   <span
-                    className={`inline-block h-5 w-5 transform rounded-full bg-white shadow transition-transform ${
+                    className={`absolute top-1 h-6 w-6 rounded-full bg-white shadow-md transition-transform duration-200 ${
                       tavilyEnabled ? 'translate-x-7' : 'translate-x-1'
                     }`}
                   />
-                </button>
-              </div>
+                </div>
+              </button>
 
               <div className="mt-4 p-3 bg-amber-50 border border-amber-200 rounded-lg text-sm text-amber-800">
                 <strong>Note:</strong> Web search uses your Tavily quota (1,000 searches/month on
