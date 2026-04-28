@@ -174,6 +174,71 @@ export default function AdminClient() {
     router.push('/admin/login');
   }
 
+  // ── Alumni state ─────────────────────────────────────────────────────────
+  const [activeTab, setActiveTab] = useState<'documents' | 'alumni'>('documents');
+  const alumniCsvRef = useRef<HTMLInputElement>(null);
+  const [alumniCity, setAlumniCity] = useState('');
+  const [alumniFile, setAlumniFile] = useState<File | null>(null);
+  const [alumniUploading, setAlumniUploading] = useState(false);
+  const [alumniUploadResult, setAlumniUploadResult] = useState('');
+  const [alumniList, setAlumniList] = useState<Array<{
+    id: string; full_name: string; city: string | null; company: string | null;
+    role: string | null; industry: string | null; facebook_url: string | null;
+  }>>([]);
+  const [alumniFilter, setAlumniFilter] = useState({ city: '', industry: '' });
+  const [loadingAlumni, setLoadingAlumni] = useState(false);
+
+  const fetchAlumni = async (city?: string, industry?: string) => {
+    setLoadingAlumni(true);
+    try {
+      const params = new URLSearchParams();
+      if (city) params.set('city', city);
+      if (industry) params.set('industry', industry);
+      const res = await fetch(`/api/admin/alumni?${params}`);
+      const data = await res.json();
+      setAlumniList(data.alumni ?? []);
+    } finally {
+      setLoadingAlumni(false);
+    }
+  };
+
+  useEffect(() => {
+    if (activeTab === 'alumni') fetchAlumni();
+  }, [activeTab]);
+
+  async function handleAlumniUpload(e: FormEvent) {
+    e.preventDefault();
+    if (!alumniFile) { setAlumniUploadResult('Please select a CSV file'); return; }
+    if (!alumniCity.trim()) { setAlumniUploadResult('Please enter the city for this group'); return; }
+
+    setAlumniUploading(true);
+    setAlumniUploadResult('');
+    try {
+      const fd = new FormData();
+      fd.append('file', alumniFile);
+      fd.append('city', alumniCity.trim());
+      const res = await fetch('/api/admin/alumni', { method: 'POST', body: fd });
+      const data = await res.json();
+      if (!res.ok) {
+        setAlumniUploadResult(`Error: ${data.error}`);
+      } else {
+        setAlumniUploadResult(`✓ Imported ${data.inserted} alumni from ${alumniCity}`);
+        setAlumniCity('');
+        setAlumniFile(null);
+        if (alumniCsvRef.current) alumniCsvRef.current.value = '';
+        await fetchAlumni();
+      }
+    } finally {
+      setAlumniUploading(false);
+    }
+  }
+
+  async function handleDeleteAlumni(id: string, name: string) {
+    if (!confirm(`Remove ${name} from the alumni database?`)) return;
+    await fetch('/api/admin/alumni', { method: 'DELETE', body: JSON.stringify({ id }), headers: { 'Content-Type': 'application/json' } });
+    await fetchAlumni(alumniFilter.city, alumniFilter.industry);
+  }
+
   return (
     <div className="min-h-screen bg-gray-50">
       {/* Header */}
@@ -196,6 +261,158 @@ export default function AdminClient() {
       </header>
 
       <div className="max-w-4xl mx-auto px-4 py-8 space-y-8">
+
+        {/* Tab navigation */}
+        <div className="flex gap-1 bg-white rounded-xl shadow p-1">
+          {(['documents', 'alumni'] as const).map((tab) => (
+            <button
+              key={tab}
+              type="button"
+              onClick={() => setActiveTab(tab)}
+              className={`flex-1 py-2 px-4 rounded-lg text-sm font-medium transition-colors capitalize ${
+                activeTab === tab
+                  ? 'bg-fbk-700 text-white shadow'
+                  : 'text-gray-600 hover:bg-gray-100'
+              }`}
+            >
+              {tab === 'alumni' ? '🤝 Alumni Network' : '📄 Documents'}
+            </button>
+          ))}
+        </div>
+
+        {activeTab === 'alumni' && (
+          <div className="space-y-6">
+            {/* Alumni CSV Upload */}
+            <section className="bg-white rounded-2xl shadow p-6">
+              <h2 className="text-lg font-semibold text-gray-900 mb-1">Import Alumni CSV</h2>
+              <p className="text-sm text-gray-500 mb-4">
+                Upload a CSV exported from a Facebook city group. Required columns: <code className="bg-gray-100 px-1 rounded">Facebook URL</code>, <code className="bg-gray-100 px-1 rounded">Full Name</code>, <code className="bg-gray-100 px-1 rounded">Company</code>. Optional: First Name, Last Name, Role, LinkedIn URL.
+              </p>
+              <form onSubmit={handleAlumniUpload} className="space-y-4">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">
+                      City / Location <span className="text-red-500">*</span>
+                    </label>
+                    <input
+                      type="text"
+                      value={alumniCity}
+                      onChange={(e) => setAlumniCity(e.target.value)}
+                      placeholder="New York, NY"
+                      className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-fbk-500 focus:outline-none"
+                    />
+                    <p className="text-xs text-gray-400 mt-1">This labels every person from this file with this city.</p>
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">
+                      CSV File <span className="text-red-500">*</span>
+                    </label>
+                    <input
+                      ref={alumniCsvRef}
+                      type="file"
+                      accept=".csv"
+                      onChange={(e) => setAlumniFile(e.target.files?.[0] ?? null)}
+                      className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm"
+                    />
+                  </div>
+                </div>
+                <button
+                  type="submit"
+                  disabled={alumniUploading}
+                  className="px-5 py-2 bg-fbk-700 text-white rounded-lg text-sm font-medium hover:bg-fbk-800 disabled:opacity-50 transition-colors"
+                >
+                  {alumniUploading ? 'Importing…' : 'Import Alumni'}
+                </button>
+                {alumniUploadResult && (
+                  <p className={`text-sm ${alumniUploadResult.startsWith('✓') ? 'text-green-700' : 'text-red-600'}`}>
+                    {alumniUploadResult}
+                  </p>
+                )}
+              </form>
+            </section>
+
+            {/* Alumni list */}
+            <section className="bg-white rounded-2xl shadow p-6">
+              <div className="flex items-center justify-between mb-4">
+                <h2 className="text-lg font-semibold text-gray-900">Alumni Database ({alumniList.length})</h2>
+                <div className="flex gap-2">
+                  <input
+                    type="text"
+                    placeholder="Filter by city…"
+                    value={alumniFilter.city}
+                    onChange={(e) => {
+                      setAlumniFilter((f) => ({ ...f, city: e.target.value }));
+                      fetchAlumni(e.target.value, alumniFilter.industry);
+                    }}
+                    className="px-2 py-1 border border-gray-300 rounded text-xs w-28"
+                  />
+                  <input
+                    type="text"
+                    placeholder="Filter by industry…"
+                    value={alumniFilter.industry}
+                    onChange={(e) => {
+                      setAlumniFilter((f) => ({ ...f, industry: e.target.value }));
+                      fetchAlumni(alumniFilter.city, e.target.value);
+                    }}
+                    className="px-2 py-1 border border-gray-300 rounded text-xs w-32"
+                  />
+                </div>
+              </div>
+
+              {loadingAlumni ? (
+                <p className="text-sm text-gray-500">Loading…</p>
+              ) : alumniList.length === 0 ? (
+                <p className="text-sm text-gray-400">No alumni yet. Upload a CSV above to get started.</p>
+              ) : (
+                <div className="overflow-x-auto">
+                  <table className="w-full text-xs">
+                    <thead>
+                      <tr className="border-b text-left text-gray-500">
+                        <th className="pb-2 pr-3 font-medium">Name</th>
+                        <th className="pb-2 pr-3 font-medium">Company</th>
+                        <th className="pb-2 pr-3 font-medium">Industry</th>
+                        <th className="pb-2 pr-3 font-medium">City</th>
+                        <th className="pb-2 font-medium">Links</th>
+                        <th className="pb-2 font-medium"></th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {alumniList.map((a) => (
+                        <tr key={a.id} className="border-b last:border-0 hover:bg-gray-50">
+                          <td className="py-2 pr-3 font-medium text-gray-900">{a.full_name}</td>
+                          <td className="py-2 pr-3 text-gray-600">{a.company ?? '—'}</td>
+                          <td className="py-2 pr-3">
+                            {a.industry ? (
+                              <span className="px-1.5 py-0.5 bg-blue-50 text-blue-700 rounded text-[10px] font-medium">{a.industry}</span>
+                            ) : '—'}
+                          </td>
+                          <td className="py-2 pr-3 text-gray-500">{a.city ?? '—'}</td>
+                          <td className="py-2 pr-3">
+                            {a.facebook_url && (
+                              <a href={a.facebook_url} target="_blank" rel="noreferrer"
+                                className="text-blue-600 hover:underline mr-2">FB</a>
+                            )}
+                          </td>
+                          <td className="py-2">
+                            <button
+                              type="button"
+                              onClick={() => handleDeleteAlumni(a.id, a.full_name)}
+                              className="text-red-400 hover:text-red-600 text-[10px]"
+                            >
+                              Remove
+                            </button>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </section>
+          </div>
+        )}
+
+        {activeTab === 'documents' && <div className="space-y-8">
 
         {/* Upload section */}
         <section className="bg-white rounded-2xl shadow p-6">
@@ -405,6 +622,8 @@ export default function AdminClient() {
             </div>
           )}
         </section>
+
+        </div>} {/* end activeTab === 'documents' */}
 
       </div>
     </div>
