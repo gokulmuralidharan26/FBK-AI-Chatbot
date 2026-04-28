@@ -1,4 +1,4 @@
-import { gemini, CHAT_MODEL, createEmbedding } from './openai';
+import { openai as gemini, CHAT_MODEL, createEmbedding } from './openai';
 import { supabase, type Source, type DocumentChunk } from './supabase';
 import type OpenAI from 'openai';
 
