@@ -28,36 +28,74 @@ RULES (follow strictly):
 LINK ALLOWLIST (you may always reference these):
 ${LINK_ALLOWLIST.map((u) => `- ${u}`).join('\n')}`;
 
-export async function retrieveChunks(query: string, k = 5): Promise<DocumentChunk[]> {
+function cosineSimilarity(a: number[], b: number[]): number {
+  let dot = 0, magA = 0, magB = 0;
+  for (let i = 0; i < a.length; i++) {
+    dot += a[i] * (b[i] ?? 0);
+    magA += a[i] ** 2;
+    magB += (b[i] ?? 0) ** 2;
+  }
+  return magA && magB ? dot / (Math.sqrt(magA) * Math.sqrt(magB)) : 0;
+}
+
+export async function retrieveChunks(query: string, k = 10): Promise<DocumentChunk[]> {
   let embedding: number[];
 
   try {
     embedding = await createEmbedding(query, 'query');
   } catch (err) {
-    // If the embedding API is unavailable, skip RAG and let the LLM answer from its own knowledge
     console.warn('Embedding unavailable, skipping RAG:', (err as Error).message);
     return [];
   }
 
-  const { data, error } = await supabase.rpc('match_document_chunks', {
+  // Try the vector index first
+  const { data: rpcData, error: rpcError } = await supabase.rpc('match_document_chunks', {
     query_embedding: embedding,
     match_count: k,
     match_threshold: 0.0,
   });
 
-  if (error) {
-    console.error('pgvector search error:', error);
+  // If the index returned a healthy set of results, trust it
+  const minExpected = Math.min(k, 5);
+  if (!rpcError && rpcData && (rpcData as DocumentChunk[]).length >= minExpected) {
+    const results = rpcData as DocumentChunk[];
+    console.log(`RAG (index): query="${query}" → ${results.length} chunks`);
+    results.forEach((c, i) =>
+      console.log(`  [${i}] sim=${(c as unknown as { similarity: number }).similarity?.toFixed(3)} title="${c.metadata.title}"`)
+    );
+    return results;
+  }
+
+  // IVFFlat index returned too few results (likely stale after bulk inserts).
+  // Fall back to fetching all chunks and computing similarity in JS.
+  // With ~200 chunks this is fast (~1–2 MB, <200 ms latency).
+  console.warn(`RAG: index returned ${rpcData?.length ?? 0}/${minExpected} expected results — falling back to full scan`);
+
+  const { data: allChunks, error: scanError } = await supabase
+    .from('document_chunks')
+    .select('id, document_id, content, metadata, embedding');
+
+  if (scanError || !allChunks) {
+    console.error('Full-scan fallback failed:', scanError);
     return [];
   }
 
-  console.log(`RAG: query="${query}" → ${(data ?? []).length} chunks found`);
-  if (data?.length) {
-    (data as DocumentChunk[]).forEach((c, i) => {
-      console.log(`  [${i}] similarity=${(c as unknown as { similarity: number }).similarity?.toFixed(3)} title="${c.metadata.title}"`);
-    });
-  }
+  const scored = (allChunks as Array<DocumentChunk & { embedding: string | number[] }>)
+    .map((chunk) => {
+      const raw = chunk.embedding;
+      const chunkEmb: number[] = typeof raw === 'string' ? JSON.parse(raw) : (raw as number[]);
+      return { chunk, sim: cosineSimilarity(embedding, chunkEmb) };
+    })
+    .filter((s) => s.sim > 0.3)
+    .sort((a, b) => b.sim - a.sim)
+    .slice(0, k);
 
-  return (data ?? []) as DocumentChunk[];
+  console.log(`RAG (JS scan): query="${query}" → ${scored.length} chunks`);
+  scored.forEach(({ chunk, sim }, i) =>
+    console.log(`  [${i}] sim=${sim.toFixed(3)} title="${chunk.metadata.title}"`)
+  );
+
+  return scored.map(({ chunk }) => chunk as DocumentChunk);
 }
 
 export async function buildRagStream(

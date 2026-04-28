@@ -12,8 +12,9 @@ import pdfParse from 'pdf-parse/lib/pdf-parse.js';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 config({ path: path.resolve(__dirname, '../web/.env.local') });
 
-const CHUNK_SIZE = 800;
-const CHUNK_OVERLAP = 100;
+// Small chunks so each chunk covers only ~7 names, keeping individual name signal strong
+const CHUNK_SIZE = 150;
+const CHUNK_OVERLAP = 30;
 const BATCH_SIZE = 5;
 
 const supabase = createClient(
