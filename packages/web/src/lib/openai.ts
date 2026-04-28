@@ -1,12 +1,8 @@
 import OpenAI from 'openai';
 
-if (!process.env.NAVIGATOR_API_KEY) {
-  throw new Error('Missing env: NAVIGATOR_API_KEY');
-}
-
-// NaviGator client — used for embeddings only
+// NaviGator client — used for embeddings only (graceful: if key missing, embedding will fail and be caught by caller)
 export const openai = new OpenAI({
-  apiKey: process.env.NAVIGATOR_API_KEY,
+  apiKey: process.env.NAVIGATOR_API_KEY ?? 'missing',
   baseURL: process.env.NAVIGATOR_BASE_URL,
 });
 
