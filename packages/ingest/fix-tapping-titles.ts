@@ -73,9 +73,23 @@ async function embed(text: string): Promise<number[]> {
 }
 
 /**
+ * Split names fused together by multi-column PDF extraction.
+ * "Ella GeorgeKrish TalatiSebastian Palomino" → ["Ella George","Krish Talati","Sebastian Palomino"]
+ * The pattern: a lowercase letter immediately followed by an uppercase letter marks a boundary.
+ */
+function splitFusedNames(line: string): string[] {
+  // Insert a delimiter at every lowercase→uppercase transition
+  const split = line.replace(/([a-záàâãéèêíïóôõöúüñç])([A-ZÁÀÂÃÉÈÍÏÓÔÕÖÚÜÑÇ])/g, '$1\u0000$2');
+  const parts = split.split('\u0000').map((s) => s.trim()).filter((s) => s.length > 2);
+  // Each part should look like "First Last" (2–4 words, each capitalized)
+  return parts.filter((p) => /^[A-ZÁÀÂÃÉÈÍÏÓÔÕÖÚÜÑÇ]/.test(p) && p.split(' ').length >= 2 && p.split(' ').length <= 5);
+}
+
+/**
  * Extract individual member names from tapping class PDF text.
  * Returns sentences like "Gokul Muralidharan was inducted into Florida Blue Key
  * in the FBK Fall 2024 Tapping Class." for precise per-person retrieval.
+ * Handles both single-column (one name per line) and multi-column (fused names) PDFs.
  */
 function extractMemberSentences(text: string, title: string, sourceUrl: string): string[] {
   const lines = text
@@ -84,32 +98,46 @@ function extractMemberSentences(text: string, title: string, sourceUrl: string):
     .map((l) => l.trim())
     .filter((l) => l.length > 0);
 
-  const sentences: string[] = [];
-  // Name lines: two-word lines where both words start with uppercase (or have comma-separated Last, First)
-  const nameRe = /^([A-Z][a-zA-Zá-üÀ-ÿ'\-]+(?:\s[A-Z][a-zA-Zá-üÀ-ÿ'\-]+)+)$/;
-  const lastFirstRe = /^([A-Z][a-zA-Zá-üÀ-ÿ'\-]+),\s*([A-Z][a-zA-Zá-üÀ-ÿ'\-]+.*)$/;
+  const names = new Set<string>();
+  const nameRe = /^([A-Z][a-zA-Záàâãéèêíïóôõöúüñç'\-]+(?:\s[A-Z][a-zA-Záàâãéèêíïóôõöúüñç'\-]+)+)$/;
+  const lastFirstRe = /^([A-Z][a-zA-Záàâãéèêíïóôõöúüñç'\-]+),\s*([A-Z][a-zA-Záàâãéèêíïóôõöúüñç'\-]+.*)$/;
 
-  // Also collect all tokens that look like proper-noun pairs (handles PDFs with spaces removed)
   for (const line of lines) {
+    // ① Multi-column fused names FIRST: "Ella GeorgeKrish TalatiSebastian Palomino"
+    //    Detect by lowercase→uppercase transition inside a word (e.g. "eK", "iS")
+    if (line.length > 8 && /[a-z][A-Z]/.test(line)) {
+      const parts = splitFusedNames(line);
+      if (parts.length > 1) {
+        parts.forEach((p) => names.add(p));
+        continue;
+      }
+    }
+
+    // ② Last, First format (e.g. "Alonge, Adetola")
     const lastFirst = line.match(lastFirstRe);
     if (lastFirst) {
-      const name = `${lastFirst[2]} ${lastFirst[1]}`;
-      sentences.push(`${name} was inducted into Florida Blue Key in the ${title}.`);
+      names.add(`${lastFirst[2].trim()} ${lastFirst[1].trim()}`);
       continue;
     }
-    if (nameRe.test(line) && line.split(' ').length >= 2 && line.split(' ').length <= 5) {
-      sentences.push(`${line} was inducted into Florida Blue Key in the ${title}.`);
+
+    // ③ Clean single-name line (2–5 words, all title-cased, no internal uppercase)
+    const words = line.split(' ');
+    if (words.length >= 2 && words.length <= 5 && nameRe.test(line)) {
+      names.add(line);
     }
   }
 
-  // If we couldn't extract individual names, fall back to small text chunks
-  if (sentences.length < 3) {
-    return chunkText(text).map((chunk) => chunk);
+  // Fall back to small text chunks if we couldn't extract any names
+  if (names.size < 3) {
+    return chunkText(text);
   }
 
-  // Add one summary chunk listing all names for "who was in X" queries
-  const allNames = sentences.map((s) => s.replace(/ was inducted.*/, ''));
-  const summary = `${title} members: ${allNames.join(', ')}`;
+  const sentences = [...names].map(
+    (name) => `${name} was inducted into Florida Blue Key in the ${title}.`
+  );
+
+  // Also add a summary chunk for "who was in X class" queries
+  const summary = `${title} members: ${[...names].join(', ')}`;
   const summaryChunks = chunkText(summary);
   return [...sentences, ...summaryChunks];
 }
