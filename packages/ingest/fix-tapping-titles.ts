@@ -12,7 +12,6 @@ import pdfParse from 'pdf-parse/lib/pdf-parse.js';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 config({ path: path.resolve(__dirname, '../web/.env.local') });
 
-// Small chunks so each chunk covers only ~7 names, keeping individual name signal strong
 const CHUNK_SIZE = 150;
 const CHUNK_OVERLAP = 30;
 const BATCH_SIZE = 5;
@@ -73,6 +72,48 @@ async function embed(text: string): Promise<number[]> {
   return r.data[0].embedding;
 }
 
+/**
+ * Extract individual member names from tapping class PDF text.
+ * Returns sentences like "Gokul Muralidharan was inducted into Florida Blue Key
+ * in the FBK Fall 2024 Tapping Class." for precise per-person retrieval.
+ */
+function extractMemberSentences(text: string, title: string, sourceUrl: string): string[] {
+  const lines = text
+    .replace(/\r\n/g, '\n')
+    .split('\n')
+    .map((l) => l.trim())
+    .filter((l) => l.length > 0);
+
+  const sentences: string[] = [];
+  // Name lines: two-word lines where both words start with uppercase (or have comma-separated Last, First)
+  const nameRe = /^([A-Z][a-zA-Zá-üÀ-ÿ'\-]+(?:\s[A-Z][a-zA-Zá-üÀ-ÿ'\-]+)+)$/;
+  const lastFirstRe = /^([A-Z][a-zA-Zá-üÀ-ÿ'\-]+),\s*([A-Z][a-zA-Zá-üÀ-ÿ'\-]+.*)$/;
+
+  // Also collect all tokens that look like proper-noun pairs (handles PDFs with spaces removed)
+  for (const line of lines) {
+    const lastFirst = line.match(lastFirstRe);
+    if (lastFirst) {
+      const name = `${lastFirst[2]} ${lastFirst[1]}`;
+      sentences.push(`${name} was inducted into Florida Blue Key in the ${title}.`);
+      continue;
+    }
+    if (nameRe.test(line) && line.split(' ').length >= 2 && line.split(' ').length <= 5) {
+      sentences.push(`${line} was inducted into Florida Blue Key in the ${title}.`);
+    }
+  }
+
+  // If we couldn't extract individual names, fall back to small text chunks
+  if (sentences.length < 3) {
+    return chunkText(text).map((chunk) => chunk);
+  }
+
+  // Add one summary chunk listing all names for "who was in X" queries
+  const allNames = sentences.map((s) => s.replace(/ was inducted.*/, ''));
+  const summary = `${title} members: ${allNames.join(', ')}`;
+  const summaryChunks = chunkText(summary);
+  return [...sentences, ...summaryChunks];
+}
+
 for (const { fileId, title } of KNOWN) {
   const sourceUrl = `https://drive.google.com/file/d/${fileId}/view?usp=sharing`;
   console.log(`\n[${title}]`);
@@ -107,7 +148,7 @@ for (const { fileId, title } of KNOWN) {
     }
 
     await supabase.from('documents').update({ status: 'ingesting' }).eq('id', docId);
-    const chunks = chunkText(text);
+    const chunks = extractMemberSentences(text, title, sourceUrl);
 
     for (let i = 0; i < chunks.length; i += BATCH_SIZE) {
       const batch = chunks.slice(i, i + BATCH_SIZE);
@@ -116,7 +157,7 @@ for (const { fileId, title } of KNOWN) {
         document_id: docId,
         content,
         metadata: { title, source_url: sourceUrl, chunk_index: i + j },
-        embedding: await embed(`${title}: ${content}`),
+        embedding: await embed(content),
       })));
       await supabase.from('document_chunks').insert(rows);
     }
@@ -125,7 +166,8 @@ for (const { fileId, title } of KNOWN) {
       .update({ status: 'ingested', ingested_at: new Date().toISOString() })
       .eq('id', docId);
 
-    console.log(`  ✓ ${chunks.length} chunks, ${text.length} chars`);
+    const memberCount = chunks.filter(c => c.includes(' was inducted ')).length;
+    console.log(`  ✓ ${chunks.length} chunks (${memberCount} individual member entries)`);
   } catch (e) {
     console.log(`  ✗ ${(e as Error).message.slice(0, 80)}`);
   }
