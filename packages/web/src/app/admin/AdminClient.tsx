@@ -174,8 +174,34 @@ export default function AdminClient() {
     router.push('/admin/login');
   }
 
+  // ── Settings / Tavily state ───────────────────────────────────────────────
+  const [tavilyEnabled, setTavilyEnabled] = useState(false);
+  const [tavilyToggling, setTavilyToggling] = useState(false);
+
+  useEffect(() => {
+    fetch('/api/admin/settings')
+      .then((r) => r.json())
+      .then((d) => setTavilyEnabled(d.settings?.tavily_enabled === 'true'))
+      .catch(() => {});
+  }, []);
+
+  async function handleToggleTavily() {
+    setTavilyToggling(true);
+    const newVal = !tavilyEnabled;
+    try {
+      await fetch('/api/admin/settings', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ key: 'tavily_enabled', value: String(newVal) }),
+      });
+      setTavilyEnabled(newVal);
+    } finally {
+      setTavilyToggling(false);
+    }
+  }
+
   // ── Alumni state ─────────────────────────────────────────────────────────
-  const [activeTab, setActiveTab] = useState<'documents' | 'alumni'>('documents');
+  const [activeTab, setActiveTab] = useState<'documents' | 'alumni' | 'settings'>('documents');
   const alumniCsvRef = useRef<HTMLInputElement>(null);
   const [alumniCity, setAlumniCity] = useState('');
   const [alumniFile, setAlumniFile] = useState<File | null>(null);
@@ -264,7 +290,7 @@ export default function AdminClient() {
 
         {/* Tab navigation */}
         <div className="flex gap-1 bg-white rounded-xl shadow p-1">
-          {(['documents', 'alumni'] as const).map((tab) => (
+          {(['documents', 'alumni', 'settings'] as const).map((tab) => (
             <button
               key={tab}
               type="button"
@@ -275,7 +301,7 @@ export default function AdminClient() {
                   : 'text-gray-600 hover:bg-gray-100'
               }`}
             >
-              {tab === 'alumni' ? '🤝 Alumni Network' : '📄 Documents'}
+              {tab === 'alumni' ? '🤝 Alumni Network' : tab === 'settings' ? '⚙️ Settings' : '📄 Documents'}
             </button>
           ))}
         </div>
@@ -624,6 +650,57 @@ export default function AdminClient() {
         </section>
 
         </div>} {/* end activeTab === 'documents' */}
+
+        {/* ── Settings Tab ──────────────────────────────────────────────── */}
+        {activeTab === 'settings' && (
+          <div className="space-y-6">
+
+            {/* Web Search (Tavily) */}
+            <section className="bg-white rounded-2xl shadow p-6">
+              <h2 className="text-lg font-semibold text-gray-900 mb-1">Web Search</h2>
+              <p className="text-sm text-gray-500 mb-6">
+                When enabled, the chatbot will search the web in real time for every query and
+                include those results alongside its existing FBK knowledge base. Requires a
+                <code className="bg-gray-100 px-1 rounded mx-1">TAVILY_API_KEY</code>
+                environment variable to be set.
+              </p>
+
+              <div className="flex items-center justify-between p-4 bg-gray-50 rounded-xl border border-gray-200">
+                <div>
+                  <p className="font-medium text-gray-900">Tavily Web Search</p>
+                  <p className="text-sm text-gray-500 mt-0.5">
+                    {tavilyEnabled
+                      ? 'Active — chatbot will search the web for every query'
+                      : 'Inactive — chatbot uses only its FBK knowledge base'}
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={handleToggleTavily}
+                  disabled={tavilyToggling}
+                  className={`relative inline-flex h-7 w-13 items-center rounded-full transition-colors focus:outline-none disabled:opacity-60 cursor-pointer ${
+                    tavilyEnabled ? 'bg-fbk-600' : 'bg-gray-300'
+                  }`}
+                  style={{ width: '3.25rem' }}
+                  aria-label={tavilyEnabled ? 'Disable web search' : 'Enable web search'}
+                >
+                  <span
+                    className={`inline-block h-5 w-5 transform rounded-full bg-white shadow transition-transform ${
+                      tavilyEnabled ? 'translate-x-7' : 'translate-x-1'
+                    }`}
+                  />
+                </button>
+              </div>
+
+              <div className="mt-4 p-3 bg-amber-50 border border-amber-200 rounded-lg text-sm text-amber-800">
+                <strong>Note:</strong> Web search uses your Tavily quota (1,000 searches/month on
+                the free plan). Every user message counts as one search when enabled. Disable it
+                to conserve quota or keep the bot focused on FBK-specific knowledge.
+              </div>
+            </section>
+
+          </div>
+        )}
 
       </div>
     </div>

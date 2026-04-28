@@ -4,6 +4,7 @@ import { matchFaq } from '@/lib/faq';
 import { retrieveChunks, buildRagStream, parseSourcesFromReply } from '@/lib/rag';
 import { supabase, type Source } from '@/lib/supabase';
 import { isAlumniQuery, parseAlumniQuery, searchAlumni, formatAlumniResults } from '@/lib/alumni';
+import { isWebSearchEnabled, webSearch, type TavilyResult } from '@/lib/tavily';
 
 export const runtime = 'nodejs';
 export const maxDuration = 60;
@@ -167,6 +168,19 @@ ${alumniContext}`;
     // ── RAG pipeline ──────────────────────────────────────────────────────────
     const chunks = await retrieveChunks(userMessage, 10);
 
+    // ── Web search (Tavily) — augments RAG context when enabled ──────────────
+    let tavilyResults: TavilyResult[] = [];
+    try {
+      const searchEnabled = await isWebSearchEnabled();
+      if (searchEnabled && process.env.TAVILY_API_KEY) {
+        const { sources } = await webSearch(userMessage, 5);
+        tavilyResults = sources;
+        console.log(`Tavily: found ${sources.length} results for "${userMessage}"`);
+      }
+    } catch (err) {
+      console.warn('Tavily search failed (non-fatal):', (err as Error).message);
+    }
+
     // Fetch recent history for context
     const { data: historyRows } = await supabase
       .from('chat_messages')
@@ -182,7 +196,8 @@ ${alumniContext}`;
     const { stream: openaiStream, sources: ragSources } = await buildRagStream(
       userMessage,
       history,
-      chunks
+      chunks,
+      tavilyResults
     );
 
     // ── SSE streaming response ────────────────────────────────────────────────

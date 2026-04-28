@@ -1,6 +1,7 @@
 import { openai as gemini, CHAT_MODEL, createEmbedding } from './openai';
 import { supabase, type Source, type DocumentChunk } from './supabase';
 import type OpenAI from 'openai';
+import type { TavilyResult } from './tavily';
 
 // URLs that the bot is allowed to mention even without RAG evidence
 const LINK_ALLOWLIST: string[] = [
@@ -101,15 +102,25 @@ export async function retrieveChunks(query: string, k = 10): Promise<DocumentChu
 export async function buildRagStream(
   userMessage: string,
   history: Array<{ role: 'user' | 'assistant'; content: string }>,
-  chunks: DocumentChunk[]
+  chunks: DocumentChunk[],
+  webResults: TavilyResult[] = []
 ): Promise<{ stream: AsyncIterable<OpenAI.Chat.Completions.ChatCompletionChunk>; sources: Source[] }> {
-  const sources: Source[] = chunks.map((c) => ({
+  const ragSources: Source[] = chunks.map((c) => ({
     title: c.metadata.title ?? 'FBK Document',
     url: c.metadata.source_url ?? 'https://fbk.org',
     snippet: c.content.slice(0, 200),
   }));
 
-  const contextBlock =
+  const webSources: Source[] = webResults.map((r) => ({
+    title: r.title,
+    url: r.url,
+    snippet: r.content.slice(0, 200),
+  }));
+
+  const sources: Source[] = [...ragSources, ...webSources];
+
+  // Build context block from RAG chunks
+  const ragContext =
     chunks.length > 0
       ? chunks
           .map(
@@ -118,6 +129,17 @@ export async function buildRagStream(
           )
           .join('\n\n---\n\n')
       : 'No specific documents found. Answer from general FBK knowledge and the link allowlist only.';
+
+  // Append live web search results if available
+  const webContext =
+    webResults.length > 0
+      ? '\n\n--- WEB SEARCH RESULTS (live, use when relevant) ---\n' +
+        webResults
+          .map((r, i) => `[Web ${i + 1}] ${r.title} (${r.url})\n${r.content}`)
+          .join('\n\n')
+      : '';
+
+  const contextBlock = ragContext + webContext;
 
   const messages: OpenAI.Chat.Completions.ChatCompletionMessageParam[] = [
     { role: 'system', content: `${SYSTEM_PROMPT}\n\nCONTEXT:\n${contextBlock}` },
