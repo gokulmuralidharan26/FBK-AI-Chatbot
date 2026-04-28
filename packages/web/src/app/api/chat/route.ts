@@ -88,7 +88,7 @@ export async function POST(req: NextRequest) {
     }
 
     // ── RAG pipeline ──────────────────────────────────────────────────────────
-    const chunks = await retrieveChunks(userMessage, 5);
+    const chunks = await retrieveChunks(userMessage, 10);
 
     // Fetch recent history for context
     const { data: historyRows } = await supabase
