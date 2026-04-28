@@ -19,47 +19,103 @@ function getOrCreateSessionId(): string {
   }
 }
 
+function clearSessionId(): string {
+  const id = crypto.randomUUID();
+  try { localStorage.setItem(SESSION_KEY, id); } catch {}
+  return id;
+}
+
+/** Download chat messages as a plain-text file */
+function downloadChat(messages: Message[]) {
+  const lines: string[] = [
+    'FBK Assistant — Chat Transcript',
+    `Saved: ${new Date().toLocaleString()}`,
+    '─'.repeat(40),
+    '',
+  ];
+  for (const m of messages) {
+    lines.push(m.role === 'user' ? 'You:' : 'FBK Assistant:');
+    lines.push(m.content);
+    lines.push('');
+  }
+  const blob = new Blob([lines.join('\n')], { type: 'text/plain' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `fbk-chat-${new Date().toISOString().slice(0, 10)}.txt`;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
 export function ChatWidget({ apiBase }: ChatWidgetProps) {
   const [open, setOpen] = useState(false);
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState('');
   const [streaming, setStreaming] = useState(false);
   const [showTooltip, setShowTooltip] = useState(true);
+  const [loadingHistory, setLoadingHistory] = useState(false);
+
+  // 'idle' | 'confirm' — controls the end-chat confirmation overlay
+  const [endChatState, setEndChatState] = useState<'idle' | 'confirm'>('idle');
 
   const sessionIdRef = useRef<string>('');
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const abortRef = useRef<AbortController | null>(null);
+  const historyLoadedRef = useRef(false);
 
+  // ── Init session + load history on first open ─────────────────────────────
   useEffect(() => {
     sessionIdRef.current = getOrCreateSessionId();
-    // Hide tooltip after 5s
     const t = setTimeout(() => setShowTooltip(false), 5000);
     return () => clearTimeout(t);
   }, []);
 
   useEffect(() => {
-    if (open) {
-      setTimeout(() => inputRef.current?.focus(), 100);
-    }
-  }, [open]);
+    if (!open) return;
+    // Focus input whenever panel opens
+    setTimeout(() => inputRef.current?.focus(), 100);
+
+    // Load history once per session
+    if (historyLoadedRef.current) return;
+    historyLoadedRef.current = true;
+
+    const sid = sessionIdRef.current;
+    if (!sid) return;
+
+    setLoadingHistory(true);
+    fetch(`${apiBase}/api/chat/history?sessionId=${sid}&limit=50`)
+      .then((r) => r.json())
+      .then((data) => {
+        const loaded: Message[] = (data.messages ?? []).map((m: {
+          id: string; role: string; content: string; sources?: Source[];
+        }) => ({
+          id: m.id,
+          role: m.role as 'user' | 'assistant',
+          content: m.content,
+          sources: m.sources ?? [],
+        }));
+        if (loaded.length > 0) setMessages(loaded);
+      })
+      .catch(() => {})
+      .finally(() => setLoadingHistory(false));
+  }, [open, apiBase]);
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages, streaming]);
 
+  // ── Send message ──────────────────────────────────────────────────────────
   const sendMessage = useCallback(async () => {
     const text = input.trim();
     if (!text || streaming) return;
 
     const userMsgId = crypto.randomUUID();
-    const userMsg: Message = { id: userMsgId, role: 'user', content: text };
-    setMessages((prev) => [...prev, userMsg]);
+    setMessages((prev) => [...prev, { id: userMsgId, role: 'user', content: text }]);
     setInput('');
     setStreaming(true);
 
     const asstMsgId = crypto.randomUUID();
-    // Add a placeholder assistant message that we'll stream into
     setMessages((prev) => [...prev, { id: asstMsgId, role: 'assistant', content: '' }]);
 
     const controller = new AbortController();
@@ -69,16 +125,11 @@ export function ChatWidget({ apiBase }: ChatWidgetProps) {
       const res = await fetch(`${apiBase}/api/chat`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          message: text,
-          sessionId: sessionIdRef.current,
-        }),
+        body: JSON.stringify({ message: text, sessionId: sessionIdRef.current }),
         signal: controller.signal,
       });
 
-      if (!res.ok || !res.body) {
-        throw new Error(`HTTP ${res.status}`);
-      }
+      if (!res.ok || !res.body) throw new Error(`HTTP ${res.status}`);
 
       const reader = res.body.getReader();
       const decoder = new TextDecoder();
@@ -88,7 +139,6 @@ export function ChatWidget({ apiBase }: ChatWidgetProps) {
       while (true) {
         const { done, value } = await reader.read();
         if (done) break;
-
         buffer += decoder.decode(value, { stream: true });
         const lines = buffer.split('\n');
         buffer = lines.pop() ?? '';
@@ -97,7 +147,6 @@ export function ChatWidget({ apiBase }: ChatWidgetProps) {
           if (!line.startsWith('data: ')) continue;
           const raw = line.slice(6).trim();
           if (raw === '[DONE]') break;
-
           try {
             const event = JSON.parse(raw) as {
               type: 'token' | 'done' | 'error';
@@ -107,14 +156,9 @@ export function ChatWidget({ apiBase }: ChatWidgetProps) {
               sources?: Source[];
               error?: string;
             };
-
             if (event.type === 'token' && event.token) {
               setMessages((prev) =>
-                prev.map((m) =>
-                  m.id === asstMsgId
-                    ? { ...m, content: m.content + event.token! }
-                    : m
-                )
+                prev.map((m) => m.id === asstMsgId ? { ...m, content: m.content + event.token! } : m)
               );
             } else if (event.type === 'done') {
               if (event.messageId) finalMessageId = event.messageId;
@@ -134,31 +178,23 @@ export function ChatWidget({ apiBase }: ChatWidgetProps) {
               );
             } else if (event.type === 'error') {
               setMessages((prev) =>
-                prev.map((m) =>
-                  m.id === asstMsgId
-                    ? { ...m, content: `Sorry, something went wrong. Please try again.` }
-                    : m
-                )
+                prev.map((m) => m.id === asstMsgId ? { ...m, content: 'Sorry, something went wrong. Please try again.' } : m)
               );
             }
-          } catch {
-            // ignore malformed SSE lines
-          }
+          } catch { /* ignore malformed SSE */ }
         }
       }
     } catch (err) {
       if ((err as Error).name !== 'AbortError') {
         setMessages((prev) =>
-          prev.map((m) =>
-            m.id === asstMsgId
-              ? { ...m, content: 'Sorry, I ran into an error. Please try again.' }
-              : m
-          )
+          prev.map((m) => m.id === asstMsgId ? { ...m, content: 'Sorry, I ran into an error. Please try again.' } : m)
         );
       }
     } finally {
       setStreaming(false);
       abortRef.current = null;
+      // Re-focus input so the user can type immediately
+      setTimeout(() => inputRef.current?.focus(), 50);
     }
   }, [input, streaming, apiBase]);
 
@@ -170,17 +206,30 @@ export function ChatWidget({ apiBase }: ChatWidgetProps) {
   }
 
   function handleFeedback(msgId: string, rating: 'up' | 'down') {
-    setMessages((prev) =>
-      prev.map((m) => (m.id === msgId ? { ...m, feedback: rating } : m))
-    );
+    setMessages((prev) => prev.map((m) => (m.id === msgId ? { ...m, feedback: rating } : m)));
   }
+
+  // ── End chat ──────────────────────────────────────────────────────────────
+  function handleEndChat(saveFirst: boolean) {
+    if (saveFirst && messages.length > 0) downloadChat(messages);
+    // Start a fresh session
+    sessionIdRef.current = clearSessionId();
+    historyLoadedRef.current = false;
+    setMessages([]);
+    setEndChatState('idle');
+  }
+
+  const hasMessages = messages.length > 0;
 
   return (
     <div className="fbk-root">
       {/* Chat panel */}
-      <div className={`fbk-panel${open ? ' fbk-panel--open' : ' fbk-panel--closed'}`}
-           role="dialog" aria-label="FBK Assistant" style={{ position: 'relative' }}>
-
+      <div
+        className={`fbk-panel${open ? ' fbk-panel--open' : ' fbk-panel--closed'}`}
+        role="dialog"
+        aria-label="FBK Assistant"
+        style={{ position: 'relative' }}
+      >
         {/* Header */}
         <div className="fbk-header">
           <div className="fbk-header-icon">
@@ -192,14 +241,88 @@ export function ChatWidget({ apiBase }: ChatWidgetProps) {
             <div className="fbk-header-title">FBK Assistant</div>
             <div className="fbk-header-sub">Ask me anything about FBK</div>
           </div>
-          <button className="fbk-close-btn" onClick={() => setOpen(false)} aria-label="Close chat">
-            <svg viewBox="0 0 24 24"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
-          </button>
+
+          {/* Header action buttons */}
+          <div className="fbk-header-actions">
+            {/* Save chat */}
+            {hasMessages && (
+              <button
+                className="fbk-header-btn"
+                onClick={() => downloadChat(messages)}
+                aria-label="Save chat transcript"
+                title="Save chat"
+              >
+                {/* Download icon */}
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/>
+                  <polyline points="7 10 12 15 17 10"/>
+                  <line x1="12" y1="15" x2="12" y2="3"/>
+                </svg>
+              </button>
+            )}
+
+            {/* End / clear chat */}
+            {hasMessages && (
+              <button
+                className="fbk-header-btn fbk-header-btn--danger"
+                onClick={() => setEndChatState('confirm')}
+                aria-label="End chat"
+                title="End chat"
+              >
+                {/* Trash icon */}
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <polyline points="3 6 5 6 21 6"/>
+                  <path d="M19 6l-1 14a2 2 0 01-2 2H8a2 2 0 01-2-2L5 6"/>
+                  <path d="M10 11v6M14 11v6"/>
+                  <path d="M9 6V4a1 1 0 011-1h4a1 1 0 011 1v2"/>
+                </svg>
+              </button>
+            )}
+
+            {/* Minimize */}
+            <button className="fbk-close-btn" onClick={() => setOpen(false)} aria-label="Minimize chat">
+              <svg viewBox="0 0 24 24"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+            </button>
+          </div>
         </div>
+
+        {/* End-chat confirmation overlay */}
+        {endChatState === 'confirm' && (
+          <div className="fbk-confirm-overlay">
+            <div className="fbk-confirm-box">
+              <p className="fbk-confirm-title">End this chat?</p>
+              <p className="fbk-confirm-sub">All messages will be cleared. This cannot be undone.</p>
+              <div className="fbk-confirm-actions">
+                <button
+                  className="fbk-confirm-btn fbk-confirm-btn--save"
+                  onClick={() => handleEndChat(true)}
+                >
+                  Save &amp; End
+                </button>
+                <button
+                  className="fbk-confirm-btn fbk-confirm-btn--clear"
+                  onClick={() => handleEndChat(false)}
+                >
+                  End without saving
+                </button>
+                <button
+                  className="fbk-confirm-btn fbk-confirm-btn--cancel"
+                  onClick={() => setEndChatState('idle')}
+                >
+                  Cancel
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
 
         {/* Messages */}
         <div className="fbk-messages">
-          {messages.length === 0 && (
+          {loadingHistory && (
+            <div className="fbk-history-loading">Loading previous messages…</div>
+          )}
+
+          {!loadingHistory && messages.length === 0 && (
             <div className="fbk-welcome">
               <div className="fbk-welcome-icon">
                 <svg viewBox="0 0 24 24">
