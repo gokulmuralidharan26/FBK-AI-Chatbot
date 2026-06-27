@@ -94,8 +94,8 @@ async function lookupPerson(name: string): Promise<PDLPerson | null> {
   return null;
 }
 
-function titleCase(s?: string): string {
-  if (!s) return '';
+function titleCase(s?: string | null): string {
+  if (!s || typeof s !== 'string') return '';
   return s.replace(/\w\S*/g, (w) => w[0].toUpperCase() + w.slice(1).toLowerCase());
 }
 
