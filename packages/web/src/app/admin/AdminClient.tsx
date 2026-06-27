@@ -207,22 +207,48 @@ export default function AdminClient() {
   const [alumniFile, setAlumniFile] = useState<File | null>(null);
   const [alumniUploading, setAlumniUploading] = useState(false);
   const [alumniUploadResult, setAlumniUploadResult] = useState('');
-  const [alumniList, setAlumniList] = useState<Array<{
-    id: string; full_name: string; city: string | null; company: string | null;
-    role: string | null; industry: string | null; facebook_url: string | null;
-  }>>([]);
-  const [alumniFilter, setAlumniFilter] = useState({ city: '', industry: '' });
-  const [loadingAlumni, setLoadingAlumni] = useState(false);
 
-  const fetchAlumni = async (city?: string, industry?: string) => {
+  interface AlumniRow {
+    id: string; full_name: string; city: string | null; state: string | null;
+    company: string | null; role: string | null; industry: string | null;
+    tapping_class: string | null; linkedin_url: string | null;
+    facebook_url: string | null; enrichment_source: string | null;
+  }
+
+  const [alumniList, setAlumniList] = useState<AlumniRow[]>([]);
+  const [alumniTotal, setAlumniTotal] = useState(0);
+  const [alumniPage, setAlumniPage] = useState(0);
+  const ALUMNI_PAGE_SIZE = 100;
+  const [alumniFilter, setAlumniFilter] = useState({
+    search: '', city: '', state: '', industry: '', company: '', tapping_class: '',
+  });
+  const [loadingAlumni, setLoadingAlumni] = useState(false);
+  const [alumniExporting, setAlumniExporting] = useState(false);
+
+  const buildAlumniParams = (
+    overrides: Partial<typeof alumniFilter & { page: number }> = {}
+  ) => {
+    const f = { ...alumniFilter, ...overrides };
+    const p = overrides.page ?? alumniPage;
+    const params = new URLSearchParams();
+    if (f.search)        params.set('search',        f.search);
+    if (f.city)          params.set('city',           f.city);
+    if (f.state)         params.set('state',          f.state);
+    if (f.industry)      params.set('industry',       f.industry);
+    if (f.company)       params.set('company',        f.company);
+    if (f.tapping_class) params.set('tapping_class',  f.tapping_class);
+    params.set('limit',  String(ALUMNI_PAGE_SIZE));
+    params.set('offset', String(p * ALUMNI_PAGE_SIZE));
+    return params;
+  };
+
+  const fetchAlumni = async (overrides: Partial<typeof alumniFilter & { page: number }> = {}) => {
     setLoadingAlumni(true);
     try {
-      const params = new URLSearchParams();
-      if (city) params.set('city', city);
-      if (industry) params.set('industry', industry);
-      const res = await fetch(`/api/admin/alumni?${params}`);
+      const res = await fetch(`/api/admin/alumni?${buildAlumniParams(overrides)}`);
       const data = await res.json();
       setAlumniList(data.alumni ?? []);
+      setAlumniTotal(data.count ?? 0);
     } finally {
       setLoadingAlumni(false);
     }
@@ -230,7 +256,7 @@ export default function AdminClient() {
 
   useEffect(() => {
     if (activeTab === 'alumni') fetchAlumni();
-  }, [activeTab]);
+  }, [activeTab]); // eslint-disable-line react-hooks/exhaustive-deps
 
   async function handleAlumniUpload(e: FormEvent) {
     e.preventDefault();
@@ -262,7 +288,28 @@ export default function AdminClient() {
   async function handleDeleteAlumni(id: string, name: string) {
     if (!confirm(`Remove ${name} from the alumni database?`)) return;
     await fetch('/api/admin/alumni', { method: 'DELETE', body: JSON.stringify({ id }), headers: { 'Content-Type': 'application/json' } });
-    await fetchAlumni(alumniFilter.city, alumniFilter.industry);
+    await fetchAlumni();
+  }
+
+  async function handleExportCSV() {
+    setAlumniExporting(true);
+    try {
+      const params = buildAlumniParams();
+      params.set('export', '1');
+      // Use limit=5000 for full export
+      params.set('limit', '5000');
+      params.delete('offset');
+      const res = await fetch(`/api/admin/alumni?${params}`, { method: 'POST' });
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = 'fbk-alumni.csv';
+      a.click();
+      URL.revokeObjectURL(url);
+    } finally {
+      setAlumniExporting(false);
+    }
   }
 
   return (
@@ -357,82 +404,150 @@ export default function AdminClient() {
               </form>
             </section>
 
-            {/* Alumni list */}
+            {/* Alumni Browser */}
             <section className="bg-white rounded-2xl shadow p-6">
+              {/* Header row */}
               <div className="flex items-center justify-between mb-4">
-                <h2 className="text-lg font-semibold text-gray-900">Alumni Database ({alumniList.length})</h2>
-                <div className="flex gap-2">
-                  <input
-                    type="text"
-                    placeholder="Filter by city…"
-                    value={alumniFilter.city}
-                    onChange={(e) => {
-                      setAlumniFilter((f) => ({ ...f, city: e.target.value }));
-                      fetchAlumni(e.target.value, alumniFilter.industry);
-                    }}
-                    className="px-2 py-1 border border-gray-300 rounded text-xs w-28"
-                  />
-                  <input
-                    type="text"
-                    placeholder="Filter by industry…"
-                    value={alumniFilter.industry}
-                    onChange={(e) => {
-                      setAlumniFilter((f) => ({ ...f, industry: e.target.value }));
-                      fetchAlumni(alumniFilter.city, e.target.value);
-                    }}
-                    className="px-2 py-1 border border-gray-300 rounded text-xs w-32"
-                  />
+                <div>
+                  <h2 className="text-lg font-semibold text-gray-900">Alumni Database</h2>
+                  <p className="text-xs text-gray-400 mt-0.5">
+                    {loadingAlumni ? 'Loading…' : `${alumniTotal.toLocaleString()} total · showing ${alumniList.length}`}
+                  </p>
                 </div>
+                <button
+                  type="button"
+                  onClick={handleExportCSV}
+                  disabled={alumniExporting}
+                  className="flex items-center gap-1.5 px-3 py-1.5 border border-gray-300 rounded-lg text-xs font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50 transition-colors"
+                >
+                  <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
+                  </svg>
+                  {alumniExporting ? 'Exporting…' : 'Export CSV'}
+                </button>
               </div>
 
+              {/* Filter bar */}
+              <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2 mb-4">
+                {[
+                  { key: 'search',        placeholder: 'Search name…',   label: 'Name' },
+                  { key: 'city',          placeholder: 'City…',          label: 'City' },
+                  { key: 'state',         placeholder: 'State…',         label: 'State' },
+                  { key: 'industry',      placeholder: 'Industry…',      label: 'Industry' },
+                  { key: 'company',       placeholder: 'Company…',       label: 'Company' },
+                  { key: 'tapping_class', placeholder: 'e.g. Fall 2022', label: 'Tapping Class' },
+                ].map(({ key, placeholder }) => (
+                  <input
+                    key={key}
+                    type="text"
+                    placeholder={placeholder}
+                    value={alumniFilter[key as keyof typeof alumniFilter]}
+                    onChange={(e) => {
+                      const updated = { ...alumniFilter, [key]: e.target.value };
+                      setAlumniFilter(updated);
+                      setAlumniPage(0);
+                      fetchAlumni({ ...updated, page: 0 });
+                    }}
+                    className="px-2 py-1.5 border border-gray-300 rounded-lg text-xs focus:ring-1 focus:ring-fbk-500 focus:outline-none"
+                  />
+                ))}
+              </div>
+
+              {/* Table */}
               {loadingAlumni ? (
-                <p className="text-sm text-gray-500">Loading…</p>
+                <p className="text-sm text-gray-400 py-6 text-center">Loading…</p>
               ) : alumniList.length === 0 ? (
-                <p className="text-sm text-gray-400">No alumni yet. Upload a CSV above to get started.</p>
+                <p className="text-sm text-gray-400 py-6 text-center">
+                  No alumni match these filters. Try uploading a CSV above or run the enrichment script.
+                </p>
               ) : (
-                <div className="overflow-x-auto">
-                  <table className="w-full text-xs">
-                    <thead>
-                      <tr className="border-b text-left text-gray-500">
-                        <th className="pb-2 pr-3 font-medium">Name</th>
-                        <th className="pb-2 pr-3 font-medium">Company</th>
-                        <th className="pb-2 pr-3 font-medium">Industry</th>
-                        <th className="pb-2 pr-3 font-medium">City</th>
-                        <th className="pb-2 font-medium">Links</th>
-                        <th className="pb-2 font-medium"></th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {alumniList.map((a) => (
-                        <tr key={a.id} className="border-b last:border-0 hover:bg-gray-50">
-                          <td className="py-2 pr-3 font-medium text-gray-900">{a.full_name}</td>
-                          <td className="py-2 pr-3 text-gray-600">{a.company ?? '—'}</td>
-                          <td className="py-2 pr-3">
-                            {a.industry ? (
-                              <span className="px-1.5 py-0.5 bg-blue-50 text-blue-700 rounded text-[10px] font-medium">{a.industry}</span>
-                            ) : '—'}
-                          </td>
-                          <td className="py-2 pr-3 text-gray-500">{a.city ?? '—'}</td>
-                          <td className="py-2 pr-3">
-                            {a.facebook_url && (
-                              <a href={a.facebook_url} target="_blank" rel="noreferrer"
-                                className="text-blue-600 hover:underline mr-2">FB</a>
-                            )}
-                          </td>
-                          <td className="py-2">
-                            <button
-                              type="button"
-                              onClick={() => handleDeleteAlumni(a.id, a.full_name)}
-                              className="text-red-400 hover:text-red-600 text-[10px]"
-                            >
-                              Remove
-                            </button>
-                          </td>
+                <>
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-xs">
+                      <thead>
+                        <tr className="border-b text-left text-gray-500">
+                          <th className="pb-2 pr-3 font-medium">Name</th>
+                          <th className="pb-2 pr-3 font-medium">Tapping Class</th>
+                          <th className="pb-2 pr-3 font-medium">Company · Role</th>
+                          <th className="pb-2 pr-3 font-medium">Industry</th>
+                          <th className="pb-2 pr-3 font-medium">Location</th>
+                          <th className="pb-2 pr-3 font-medium">Links</th>
+                          <th className="pb-2 font-medium"></th>
                         </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
+                      </thead>
+                      <tbody>
+                        {alumniList.map((a) => (
+                          <tr key={a.id} className="border-b last:border-0 hover:bg-gray-50">
+                            <td className="py-2 pr-3 font-medium text-gray-900 whitespace-nowrap">{a.full_name}</td>
+                            <td className="py-2 pr-3 text-gray-500 whitespace-nowrap">
+                              {a.tapping_class ?? '—'}
+                            </td>
+                            <td className="py-2 pr-3 text-gray-600">
+                              {a.company
+                                ? <><span className="font-medium">{a.company}</span>{a.role ? ` · ${a.role}` : ''}</>
+                                : a.role ?? '—'}
+                            </td>
+                            <td className="py-2 pr-3">
+                              {a.industry ? (
+                                <span className="px-1.5 py-0.5 bg-blue-50 text-blue-700 rounded text-[10px] font-medium whitespace-nowrap">{a.industry}</span>
+                              ) : '—'}
+                            </td>
+                            <td className="py-2 pr-3 text-gray-500 whitespace-nowrap">
+                              {[a.city, a.state].filter(Boolean).join(', ') || '—'}
+                            </td>
+                            <td className="py-2 pr-3 flex items-center gap-2">
+                              {a.linkedin_url && (
+                                <a href={a.linkedin_url} target="_blank" rel="noreferrer"
+                                  className="text-blue-600 hover:underline">LI</a>
+                              )}
+                              {a.facebook_url && (
+                                <a href={a.facebook_url} target="_blank" rel="noreferrer"
+                                  className="text-blue-600 hover:underline">FB</a>
+                              )}
+                              {!a.linkedin_url && !a.facebook_url && <span className="text-gray-300">—</span>}
+                            </td>
+                            <td className="py-2">
+                              <button
+                                type="button"
+                                onClick={() => handleDeleteAlumni(a.id, a.full_name)}
+                                className="text-red-400 hover:text-red-600 text-[10px]"
+                              >
+                                Remove
+                              </button>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+
+                  {/* Pagination */}
+                  {alumniTotal > ALUMNI_PAGE_SIZE && (
+                    <div className="flex items-center justify-between mt-4 pt-3 border-t">
+                      <span className="text-xs text-gray-400">
+                        Page {alumniPage + 1} of {Math.ceil(alumniTotal / ALUMNI_PAGE_SIZE)}
+                      </span>
+                      <div className="flex gap-2">
+                        <button
+                          type="button"
+                          disabled={alumniPage === 0}
+                          onClick={() => { const p = alumniPage - 1; setAlumniPage(p); fetchAlumni({ page: p }); }}
+                          className="px-3 py-1 border border-gray-300 rounded text-xs disabled:opacity-40 hover:bg-gray-50"
+                        >
+                          ← Prev
+                        </button>
+                        <button
+                          type="button"
+                          disabled={(alumniPage + 1) * ALUMNI_PAGE_SIZE >= alumniTotal}
+                          onClick={() => { const p = alumniPage + 1; setAlumniPage(p); fetchAlumni({ page: p }); }}
+                          className="px-3 py-1 border border-gray-300 rounded text-xs disabled:opacity-40 hover:bg-gray-50"
+                        >
+                          Next →
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                </>
               )}
             </section>
           </div>

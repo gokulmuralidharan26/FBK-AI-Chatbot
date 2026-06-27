@@ -54,7 +54,7 @@ function parseCSV(content: string): string[][] {
 
 export const maxDuration = 60;
 
-// GET: list all alumni with optional filters
+// GET: list alumni with optional filters + pagination
 export async function GET(req: NextRequest) {
   const supabase = createClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -62,21 +62,83 @@ export async function GET(req: NextRequest) {
   );
 
   const { searchParams } = new URL(req.url);
-  const city = searchParams.get('city');
-  const industry = searchParams.get('industry');
-  const limit = parseInt(searchParams.get('limit') ?? '200');
+  const city       = searchParams.get('city');
+  const state      = searchParams.get('state');
+  const industry   = searchParams.get('industry');
+  const company    = searchParams.get('company');
+  const tapping    = searchParams.get('tapping_class');
+  const search     = searchParams.get('search');           // name search
+  const limit      = Math.min(parseInt(searchParams.get('limit')  ?? '100'), 500);
+  const offset     = parseInt(searchParams.get('offset') ?? '0');
 
-  let q = supabase.from('alumni').select('*').order('full_name').limit(limit);
-  if (city) q = q.ilike('city', `%${city}%`);
-  if (industry) q = q.ilike('industry', `%${industry}%`);
+  let q = supabase
+    .from('alumni')
+    .select('id, full_name, city, state, company, role, industry, tapping_class, linkedin_url, facebook_url, enrichment_source', { count: 'exact' })
+    .order('full_name')
+    .range(offset, offset + limit - 1);
 
-  const { data, error } = await q;
+  if (city)     q = q.ilike('city',          `%${city}%`);
+  if (state)    q = q.ilike('state',         `%${state}%`);
+  if (industry) q = q.ilike('industry',      `%${industry.split('/')[0].trim()}%`);
+  if (company)  q = q.ilike('company',       `%${company}%`);
+  if (tapping)  q = q.ilike('tapping_class', `%${tapping}%`);
+  if (search)   q = q.ilike('full_name',     `%${search}%`);
+
+  const { data, error, count } = await q;
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
-  return NextResponse.json({ alumni: data ?? [], count: (data ?? []).length });
+  return NextResponse.json({ alumni: data ?? [], count: count ?? 0 });
 }
 
-// POST: import CSV
+// HEAD: export all matching alumni as CSV (same filter params as GET)
+export async function HEAD(req: NextRequest) {
+  // Intentionally empty — used for CORS preflight only
+  return new Response(null, { status: 204 });
+}
+
+// POST: import CSV  OR  export CSV (when ?export=1)
 export async function POST(req: NextRequest) {
+  const { searchParams } = new URL(req.url);
+  if (searchParams.get('export') === '1') {
+    // CSV export — re-use GET logic but fetch all rows (no pagination)
+    const supabase = createClient(
+      process.env.NEXT_PUBLIC_SUPABASE_URL!,
+      process.env.SUPABASE_SERVICE_ROLE_KEY!
+    );
+    const city     = searchParams.get('city');
+    const state    = searchParams.get('state');
+    const industry = searchParams.get('industry');
+    const company  = searchParams.get('company');
+    const tapping  = searchParams.get('tapping_class');
+    const search   = searchParams.get('search');
+
+    let q = supabase
+      .from('alumni')
+      .select('full_name, city, state, company, role, industry, tapping_class, linkedin_url, facebook_url')
+      .order('full_name')
+      .limit(5000);
+
+    if (city)     q = q.ilike('city',          `%${city}%`);
+    if (state)    q = q.ilike('state',         `%${state}%`);
+    if (industry) q = q.ilike('industry',      `%${industry.split('/')[0].trim()}%`);
+    if (company)  q = q.ilike('company',       `%${company}%`);
+    if (tapping)  q = q.ilike('tapping_class', `%${tapping}%`);
+    if (search)   q = q.ilike('full_name',     `%${search}%`);
+
+    const { data } = await q;
+    const rows = data ?? [];
+    const esc = (v: string | null | undefined) => `"${String(v ?? '').replace(/"/g, '""')}"`;
+    const headers = ['Full Name','City','State','Company','Role','Industry','Tapping Class','LinkedIn','Facebook'];
+    const lines = [
+      headers.join(','),
+      ...rows.map(r => [r.full_name,r.city,r.state,r.company,r.role,r.industry,r.tapping_class,r.linkedin_url,r.facebook_url].map(esc).join(',')),
+    ];
+    return new Response(lines.join('\n'), {
+      headers: {
+        'Content-Type': 'text/csv',
+        'Content-Disposition': 'attachment; filename="fbk-alumni.csv"',
+      },
+    });
+  }
   const supabase = createClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
     process.env.SUPABASE_SERVICE_ROLE_KEY!

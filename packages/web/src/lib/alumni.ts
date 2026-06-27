@@ -6,6 +6,7 @@ export interface AlumniRecord {
   first_name?: string | null;
   last_name?: string | null;
   city?: string | null;
+  state?: string | null;
   company?: string | null;
   role?: string | null;
   industry?: string | null;
@@ -13,19 +14,21 @@ export interface AlumniRecord {
   linkedin_url?: string | null;
   notes?: string | null;
   tapping_class?: string | null;
+  enrichment_source?: string | null;
 }
 
 export interface AlumniQuery {
   city?: string;
+  state?: string;
   industry?: string;
   company?: string;
   role?: string;
   name?: string;
+  tapping_class?: string;
 }
 
 /**
  * Detect whether a user message is an alumni networking query.
- * Returns true if the message is asking to find/connect with alumni.
  */
 export function isAlumniQuery(message: string): boolean {
   const lower = message.toLowerCase();
@@ -44,8 +47,14 @@ export function isAlumniQuery(message: string): boolean {
     'fbk in dc',
     'fbk in chicago',
     'fbk in miami',
+    'fbk in los angeles',
+    'fbk in boston',
+    'fbk in seattle',
+    'fbk in austin',
     'fbk network',
     'networking',
+    'fbk people in',
+    'members in',
     'referral',
     'outreach',
   ];
@@ -54,95 +63,150 @@ export function isAlumniQuery(message: string): boolean {
 
 /**
  * Parse a natural-language alumni query into structured filters.
- * This is a fast heuristic approach — the LLM adds nuance on top.
+ * Handles combined filters like "FBK alumni in tech in NYC from Fall 2020".
  */
 export function parseAlumniQuery(message: string): AlumniQuery {
   const lower = message.toLowerCase();
   const q: AlumniQuery = {};
 
-  // City detection
+  // ── City detection ─────────────────────────────────────────────────────────
   const cityMap: Record<string, string> = {
-    'new york': 'New York',
-    'nyc': 'New York',
-    'ny ': 'New York',
-    'manhattan': 'New York',
-    'brooklyn': 'New York',
-    'tampa': 'Tampa',
-    'jacksonville': 'Jacksonville',
-    'jax': 'Jacksonville',
-    'atlanta': 'Atlanta',
-    'atl': 'Atlanta',
-    'dc': 'Washington',
-    'washington': 'Washington',
-    'd.c.': 'Washington',
-    'chicago': 'Chicago',
-    'miami': 'Miami',
-    'los angeles': 'Los Angeles',
-    'la ': 'Los Angeles',
+    'new york city': 'New York',
+    'new york':      'New York',
+    'nyc':           'New York',
+    'manhattan':     'New York',
+    'brooklyn':      'New York',
+    'tampa':         'Tampa',
+    'jacksonville':  'Jacksonville',
+    'jax ':          'Jacksonville',
+    'atlanta':       'Atlanta',
+    ' atl ':         'Atlanta',
+    'washington dc': 'Washington',
+    'washington d.c': 'Washington',
+    ' dc ':          'Washington',
+    'chicago':       'Chicago',
+    'miami':         'Miami',
+    'fort lauderdale': 'Fort Lauderdale',
+    'orlando':       'Orlando',
+    'los angeles':   'Los Angeles',
+    ' la ':          'Los Angeles',
     'san francisco': 'San Francisco',
-    'sf ': 'San Francisco',
-    'boston': 'Boston',
-    'austin': 'Austin',
-    'seattle': 'Seattle',
+    ' sf ':          'San Francisco',
+    'boston':        'Boston',
+    'austin':        'Austin',
+    'seattle':       'Seattle',
+    'houston':       'Houston',
+    'dallas':        'Dallas',
+    'denver':        'Denver',
+    'phoenix':       'Phoenix',
+    'philadelphia':  'Philadelphia',
+    'nashville':     'Nashville',
+    'charlotte':     'Charlotte',
+    'minneapolis':   'Minneapolis',
+    'detroit':       'Detroit',
+    'san diego':     'San Diego',
+    'portland':      'Portland',
   };
   for (const [key, val] of Object.entries(cityMap)) {
     if (lower.includes(key)) { q.city = val; break; }
   }
 
-  // Industry/role detection
+  // ── State detection (if no city matched) ──────────────────────────────────
+  if (!q.city) {
+    const stateMap: Record<string, string> = {
+      'florida':       'Florida',
+      ' fl ':          'Florida',
+      'new york state': 'New York',
+      'california':    'California',
+      ' ca ':          'California',
+      'texas':         'Texas',
+      ' tx ':          'Texas',
+      'georgia':       'Georgia',
+      ' ga ':          'Georgia',
+      'illinois':      'Illinois',
+      'massachusetts': 'Massachusetts',
+      'washington state': 'Washington',
+      'colorado':      'Colorado',
+      'arizona':       'Arizona',
+      'north carolina': 'North Carolina',
+      'tennessee':     'Tennessee',
+      'virginia':      'Virginia',
+      'pennsylvania':  'Pennsylvania',
+    };
+    for (const [key, val] of Object.entries(stateMap)) {
+      if (lower.includes(key)) { q.state = val; break; }
+    }
+  }
+
+  // ── Industry/role detection ────────────────────────────────────────────────
   const industryMap: Record<string, string> = {
-    'consulting': 'Consulting',
-    'consultant': 'Consulting',
+    'consulting':        'Consulting',
+    'consultant':        'Consulting',
     'investment banking': 'Finance',
-    'banking': 'Finance',
-    'finance': 'Finance',
-    'financial': 'Finance',
-    'private equity': 'Finance',
-    'hedge fund': 'Finance',
-    'venture capital': 'Finance',
-    'vc ': 'Finance',
-    'tech': 'Tech',
-    'technology': 'Tech',
-    'software': 'Tech',
-    'engineering': 'Tech',
+    'banking':           'Finance',
+    ' finance':          'Finance',
+    'financial':         'Finance',
+    'private equity':    'Finance',
+    'hedge fund':        'Finance',
+    'venture capital':   'Finance',
+    ' vc ':              'Finance',
+    ' tech ':            'Tech',
+    'technology':        'Tech',
+    'software':          'Tech',
+    'engineering':       'Tech',
     'product management': 'Tech',
-    'product manager': 'Tech',
-    'pm ': 'Tech',
-    'law': 'Law',
-    'legal': 'Law',
-    'attorney': 'Law',
-    'lawyer': 'Law',
-    'marketing': 'Marketing / PR',
-    'pr ': 'Marketing / PR',
-    'public relations': 'Marketing / PR',
-    'healthcare': 'Healthcare',
-    'medical': 'Healthcare',
-    'doctor': 'Healthcare',
-    'real estate': 'Real Estate',
-    'government': 'Government / Policy',
-    'policy': 'Government / Policy',
-    'politics': 'Government / Policy',
-    'accounting': 'Accounting / Finance',
-    'startup': 'Entrepreneurship',
-    'founder': 'Entrepreneurship',
-    'media': 'Media / Journalism',
-    'journalism': 'Media / Journalism',
-    'education': 'Education',
-    'recruiting': 'HR / Recruiting',
-    'hr ': 'HR / Recruiting',
+    'product manager':   'Tech',
+    ' pm ':              'Tech',
+    ' law ':             'Law',
+    'legal':             'Law',
+    'attorney':          'Law',
+    'lawyer':            'Law',
+    'marketing':         'Marketing / PR',
+    ' pr ':              'Marketing / PR',
+    'public relations':  'Marketing / PR',
+    'healthcare':        'Healthcare',
+    'medical':           'Healthcare',
+    'doctor':            'Healthcare',
+    'real estate':       'Real Estate',
+    'government':        'Government / Policy',
+    'policy':            'Government / Policy',
+    'politics':          'Government / Policy',
+    'accounting':        'Accounting / Finance',
+    'startup':           'Entrepreneurship',
+    'founder':           'Entrepreneurship',
+    'entrepreneur':      'Entrepreneurship',
+    'media':             'Media / Journalism',
+    'journalism':        'Media / Journalism',
+    'education':         'Education',
+    'recruiting':        'HR / Recruiting',
+    ' hr ':              'HR / Recruiting',
+    'sports':            'Sports',
   };
   for (const [key, val] of Object.entries(industryMap)) {
     if (lower.includes(key)) { q.industry = val; break; }
   }
 
-  // Company detection — extract quoted or known names
-  const companyMatch = message.match(/(?:at|@|work(?:s|ing)? (?:at|for)|employed at)\s+([A-Z][^\s,.?!]+(?:\s[A-Z][^\s,.?!]+)?)/);
+  // ── Company detection ──────────────────────────────────────────────────────
+  const companyMatch = message.match(
+    /(?:at|@|work(?:s|ing)? (?:at|for)|employed (?:at|by)|joined|working with)\s+([A-Z][^\s,.?!]+(?:\s[A-Z][^\s,.?!]+)?)/
+  );
   if (companyMatch) q.company = companyMatch[1];
 
-  // Role keyword (non-industry specific)
-  const roleKeywords = ['product manager', 'pm', 'engineer', 'designer', 'analyst', 'associate', 'director', 'vp', 'manager', 'partner', 'associate'];
+  // ── Tapping class year detection ──────────────────────────────────────────
+  const classMatch = message.match(/(?:fall|spring)\s+(\d{4})/i);
+  if (classMatch) {
+    q.tapping_class = classMatch[0].replace(/\b\w/g, (c) => c.toUpperCase());
+  } else {
+    // Plain year like "class of 2020" or "tapped in 2020"
+    const yearMatch = message.match(/(?:class of|tapped in|from)\s+(\d{4})/i);
+    if (yearMatch) q.tapping_class = yearMatch[1];
+  }
+
+  // ── Role keyword ──────────────────────────────────────────────────────────
+  const roleKeywords = ['product manager', 'engineer', 'designer', 'analyst', 'associate',
+    'director', 'vp ', 'vice president', 'manager', 'partner', 'intern'];
   for (const kw of roleKeywords) {
-    if (lower.includes(kw)) { q.role = kw; break; }
+    if (lower.includes(kw)) { q.role = kw.trim(); break; }
   }
 
   return q;
@@ -150,16 +214,18 @@ export function parseAlumniQuery(message: string): AlumniQuery {
 
 /**
  * Search alumni by structured filters.
- * Returns up to 20 matching records.
  */
-export async function searchAlumni(query: AlumniQuery, limit = 20): Promise<AlumniRecord[]> {
+export async function searchAlumni(query: AlumniQuery, limit = 25): Promise<AlumniRecord[]> {
   let q = supabase.from('alumni').select('*');
 
   if (query.city) {
     q = q.ilike('city', `%${query.city}%`);
   }
+  if (query.state && !query.city) {
+    // Only filter by state when no city was specified
+    q = q.ilike('state', `%${query.state}%`);
+  }
   if (query.industry) {
-    // Allow partial match so "Tech" hits "Tech" and "Finance" hits "Finance / Accounting"
     q = q.ilike('industry', `%${query.industry.split('/')[0].trim()}%`);
   }
   if (query.company) {
@@ -168,10 +234,11 @@ export async function searchAlumni(query: AlumniQuery, limit = 20): Promise<Alum
   if (query.name) {
     q = q.ilike('full_name', `%${query.name}%`);
   }
-
-  // If role is product-management-specific, also search company/role columns
+  if (query.tapping_class) {
+    q = q.ilike('tapping_class', `%${query.tapping_class}%`);
+  }
   if (query.role) {
-    q = q.or(`role.ilike.%${query.role}%,notes.ilike.%${query.role}%,company.ilike.%${query.role}%`);
+    q = q.or(`role.ilike.%${query.role}%,notes.ilike.%${query.role}%`);
   }
 
   q = q.order('full_name').limit(limit);
@@ -189,26 +256,34 @@ export async function searchAlumni(query: AlumniQuery, limit = 20): Promise<Alum
  */
 export function formatAlumniResults(alumni: AlumniRecord[], query: AlumniQuery): string {
   if (alumni.length === 0) {
-    const location = query.city ? ` in ${query.city}` : '';
+    const location = query.city ? ` in ${query.city}` : query.state ? ` in ${query.state}` : '';
     const industry = query.industry ? ` in ${query.industry}` : '';
-    return `No FBK alumni found${location}${industry} in the database yet. The alumni database is still growing — you can add more alumni via the admin panel.`;
+    const classInfo = query.tapping_class ? ` from ${query.tapping_class}` : '';
+    return `No FBK alumni found${location}${industry}${classInfo} in the database yet. The alumni database is still growing — more data is added regularly via the enrichment pipeline.`;
   }
 
   const lines = alumni.map((a) => {
     const parts: string[] = [`**${a.full_name}**`];
+    if (a.tapping_class) parts.push(`[${a.tapping_class}]`);
     if (a.role && a.company) parts.push(`${a.role} at ${a.company}`);
     else if (a.company) parts.push(a.company);
     else if (a.role) parts.push(a.role);
-    if (a.industry) parts.push(`[${a.industry}]`);
-    if (a.city) parts.push(`📍 ${a.city}`);
+    if (a.industry) parts.push(`(${a.industry})`);
+    const locationParts = [a.city, a.state].filter(Boolean).join(', ');
+    if (locationParts) parts.push(`📍 ${locationParts}`);
     const links: string[] = [];
-    if (a.facebook_url) links.push(`[Facebook](${a.facebook_url})`);
     if (a.linkedin_url) links.push(`[LinkedIn](${a.linkedin_url})`);
+    if (a.facebook_url) links.push(`[Facebook](${a.facebook_url})`);
     if (links.length) parts.push(links.join(' · '));
     return `- ${parts.join(' · ')}`;
   });
 
-  const location = query.city ? ` in ${query.city}` : '';
+  const location = query.city
+    ? ` in ${query.city}`
+    : query.state
+    ? ` in ${query.state}`
+    : '';
   const industry = query.industry ? ` in ${query.industry}` : '';
-  return `Found ${alumni.length} FBK alumni${location}${industry}:\n\n${lines.join('\n')}`;
+  const classInfo = query.tapping_class ? ` from ${query.tapping_class}` : '';
+  return `Found ${alumni.length} FBK alumni${location}${industry}${classInfo}:\n\n${lines.join('\n')}`;
 }
