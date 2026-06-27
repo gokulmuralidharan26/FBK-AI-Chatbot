@@ -43,9 +43,9 @@ const MIN_CONFIDENCE = 0.6;
 if (!TAVILY_KEY)    { console.error('❌  TAVILY_API_KEY not set in .env.local'); process.exit(1); }
 if (!NAVIGATOR_KEY) { console.error('❌  NAVIGATOR_API_KEY not set in .env.local'); process.exit(1); }
 
-const supabase = createClient(SUPABASE_URL, SUPABASE_KEY, { auth: { persistSession: false } });
-const navigator = new OpenAI({ apiKey: NAVIGATOR_KEY, baseURL: NAVIGATOR_URL });
-const tavily   = tavilyClient({ apiKey: TAVILY_KEY! });
+const supabase   = createClient(SUPABASE_URL, SUPABASE_KEY, { auth: { persistSession: false } });
+const navigator  = new OpenAI({ apiKey: NAVIGATOR_KEY, baseURL: NAVIGATOR_URL });
+const tavily     = tavilyClient({ apiKey: TAVILY_KEY! });
 
 // ── CLI args ──────────────────────────────────────────────────────────────────
 
@@ -103,36 +103,33 @@ async function tavilySearch(name: string): Promise<string> {
   }
 }
 
-// ── LLM extraction (NaviGator / gpt-oss-20b) ─────────────────────────────────
+// ── LLM extraction (NaviGator) ────────────────────────────────────────────────
 
 async function llmExtract(name: string, context: string): Promise<EnrichedProfile | null> {
-  if (!context.trim()) {
-    return { name, company: null, role: null, location: null, linkedin_url: null, confidence: 0, source: 'tavily' };
-  }
-
   const prompt = `You are extracting professional profile data for a Florida Blue Key (FBK) alumni named "${name}".
 
 Based ONLY on the web search results below, extract their current professional information.
-Return a JSON object with exactly these fields:
+You MUST always respond with a valid JSON object — even if you find no information.
+
+Return ONLY this JSON (no markdown, no explanation):
 {
   "name": "${name}",
-  "company": "current company name or null",
-  "role": "current job title or null",
-  "location": "city, state format or null",
-  "linkedin_url": "full LinkedIn profile URL or null",
-  "confidence": 0.0 to 1.0
+  "company": "current employer name, or null",
+  "role": "current job title, or null",
+  "location": "City, State format, or null",
+  "linkedin_url": "full https://linkedin.com/in/... URL, or null",
+  "confidence": <number 0.0–1.0>
 }
 
-Confidence rules:
-- 0.0 if you cannot find this specific person
-- < 0.6 if the person might be someone else with the same name
-- >= 0.7 if you are fairly confident this is the right FBK alumni
-- 0.9+ only if you see "Florida Blue Key" directly associated with this person
-
-Return ONLY valid JSON, no markdown fences or explanation.
+Confidence guide:
+- 0.0  → person not found or completely ambiguous
+- 0.3  → found someone with this name but unsure if it's the FBK member
+- 0.6  → reasonably confident this is the right person
+- 0.85 → confident — name + UF/FBK context match
+- 0.95 → very confident — "Florida Blue Key" explicitly mentioned
 
 Search results:
-${context}`;
+${context || '(no results found)'}`;
 
   try {
     const res = await navigator.chat.completions.create({
@@ -142,10 +139,8 @@ ${context}`;
       max_tokens: 300,
     });
     const text = res.choices[0]?.message?.content?.trim() ?? '';
-    // Strip markdown fences and extract first JSON object
-    const stripped = text.replace(/^```json?\s*/i, '').replace(/\s*```$/i, '').trim();
-    const jsonMatch = stripped.match(/\{[\s\S]*\}/);
-    if (!jsonMatch) throw new Error('No JSON object in response');
+    const jsonMatch = text.replace(/^```json?\s*/i, '').replace(/\s*```$/i, '').trim().match(/\{[\s\S]*\}/);
+    if (!jsonMatch) throw new Error('No JSON in response');
     const parsed = JSON.parse(jsonMatch[0]) as EnrichedProfile;
     parsed.source = 'tavily+navigator';
     return parsed;
@@ -186,13 +181,11 @@ async function pdlLookup(name: string): Promise<Partial<EnrichedProfile> | null>
 // ── Upsert into alumni table ───────────────────────────────────────────────────
 
 async function upsertProfile(profile: EnrichedProfile) {
-  // Split location into city / state if possible
-  const locParts  = (profile.location ?? '').split(',').map(s => s.trim());
-  const city       = locParts[0] || null;
-  const state      = locParts[1] || null;
+  const locParts = (profile.location ?? '').split(',').map(s => s.trim());
+  const city     = locParts[0] || null;
+  const state    = locParts[1] || null;
 
-  await supabase.from('alumni').upsert({
-    full_name:         profile.name,
+  const payload = {
     company:           profile.company,
     role:              profile.role,
     city,
@@ -201,7 +194,22 @@ async function upsertProfile(profile: EnrichedProfile) {
     confidence:        profile.confidence,
     enrichment_source: profile.source,
     enriched_at:       new Date().toISOString(),
-  }, { onConflict: 'full_name' });
+  };
+
+  // Find existing row by name (case-insensitive)
+  const { data: existing } = await supabase
+    .from('alumni')
+    .select('id')
+    .ilike('full_name', profile.name)
+    .limit(1);
+
+  if (existing?.[0]) {
+    // Update the existing row
+    await supabase.from('alumni').update(payload).eq('id', existing[0].id);
+  } else {
+    // Insert a new row
+    await supabase.from('alumni').insert({ full_name: profile.name, ...payload });
+  }
 }
 
 // ── Load names to process ─────────────────────────────────────────────────────
@@ -244,7 +252,7 @@ const sleep = (ms: number) => new Promise(r => setTimeout(r, ms));
 
 console.log(`\nFBK Alumni Enrichment — Tavily + Gemini`);
 console.log(`Mode: ${DRY_RUN ? 'DRY RUN' : 'LIVE'}`);
-if (PDL_KEY) console.log('PDL: enabled (used as enhancement when Gemini confidence < 0.75)');
+if (PDL_KEY) console.log('PDL: enabled (used as enhancement when confidence < 0.75)');
 console.log('');
 
 let names = await loadNames();
